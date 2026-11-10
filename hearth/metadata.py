@@ -16,6 +16,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 METADATA_DIR = Path(__file__).resolve().parent.parent / "metadata" / "sources"
 _NAME = r"^[a-z][a-z0-9_]*$"
+# Column types the generator knows how to cast to (Databricks/Spark SQL names).
+_TYPE = r"^(string|date|int|bigint|boolean|double|decimal\(\d{1,2},\s?\d{1,2}\))$"
 
 
 class _Strict(BaseModel):
@@ -78,12 +80,19 @@ class Shape(_Strict):
     id_columns: list[str] = Field(min_length=1)
     value_columns: ValueColumns
 
+    @model_validator(mode="after")
+    def _safe_header_names(self) -> Shape:
+        bad = [c for c in self.id_columns if "`" in c or "'" in c or not c.strip()]
+        if bad:
+            raise ValueError(f"id_columns contain unsafe or blank names: {bad}")
+        return self
+
 
 class Column(_Strict):
     name: str = Field(pattern=_NAME)
     # Header in the source file. Absent for the columns created by unpivoting.
     from_: str | None = Field(default=None, alias="from")
-    type: str
+    type: str = Field(pattern=_TYPE)
     nullable: bool = True
     pattern: str | None = None
     units: str | None = None
