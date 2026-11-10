@@ -1,0 +1,37 @@
+# Source metadata: the single source of truth. dbt files are generated from this.
+# Anything marked "unverified" has not been checked against the real file or terms yet.
+schema_version: 1
+source:
+  id: zillow_zhvi_zip
+  title: Zillow Home Value Index (ZHVI) by ZIP code
+  owner: {name: Stefanie, contact: mtypeworkroom on GitHub}
+  access:
+    kind: file_download
+    url: https://files.zillowstatic.com/research/public_csvs/zhvi/Zip_zhvi_uc_sfrcondo_tier_0.33_0.67_sm_sa_month.csv
+    url_status: "file name matches the downloaded file (2026-11-10); direct URL download untested"
+    format: csv
+  license:
+    terms_url: https://www.zillow.com/research/data/
+    attribution: "Zillow Research, Zillow Home Value Index (ZHVI)"
+    redistribution: unverified
+  refresh: {cadence: monthly}
+  freshness: {warn_after_days: 45, error_after_days: 75}
+  grain: {geography: zip, time: month}
+
+  # The file is wide: one column per month. Staging turns it into one row per ZIP and month.
+  shape:
+    layout: wide
+    id_columns: [RegionID, SizeRank, RegionName, RegionType, StateName, State, City, Metro, CountyName]
+    value_columns: {pattern: '^\d{4}-\d{2}-\d{2}$', month_column: month_end, value_column: zhvi}
+
+  columns:
+    - {name: zip, from: RegionName, type: string, nullable: false, pattern: '^\d{5}$', description: "5-digit ZIP code"}
+    - {name: state, from: State, type: string, nullable: false, description: "Two-letter state code"}
+    - {name: county_name, from: CountyName, type: string, nullable: true}
+    - {name: metro_name, from: Metro, type: string, nullable: true}
+    - {name: month_end, type: date, nullable: false, description: "Last day of the month the value applies to"}
+    - {name: zhvi, type: "decimal(14,2)", nullable: true, units: usd, description: "Smoothed, seasonally adjusted typical home value"}
+
+  rules:
+    - {kind: unique, columns: [zip, month_end]}
+    - {kind: range, column: zhvi, min: 0, severity: error}
