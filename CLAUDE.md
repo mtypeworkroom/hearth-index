@@ -87,3 +87,17 @@ uv run --env-file .env python -m hearth fetch-hud zip-county
 - Redistribution terms for Zillow/HUD/FHFA are unverified. Do not commit data files.
 - Small commits with clear messages. Tests alongside code. No floats for money (decimal).
 - Verify claims about external APIs against a real response before encoding them.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on mtypeworkroom/hearth-index, via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five labels: needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
