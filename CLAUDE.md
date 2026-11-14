@@ -5,8 +5,7 @@ Free Edition. It is a resume/portfolio project: the owner (Stefanie) needs to
 understand every dbt object, so explain what you do in plain English.
 
 Goal: housing prices and trends by ZIP code, rolled up the geography hierarchy
-ZIP -> county -> metro (CBSA) -> state -> nation. Sources planned: Zillow ZHVI
-(done), HUD-USPS crosswalk (next), Zillow ZORI rents, Census ACS income, FHFA, permits.
+ZIP -> county -> metro (CBSA) -> state -> nation.
 
 ## How to work with me
 
@@ -37,8 +36,10 @@ metadata/sources/*.yml  --(pydantic validate)-->  hearth generate
 - `hearth/metadata.py` pydantic models, `load_source`, `check_header`
 - `hearth/generate.py` renders dbt sources/staging/tests from metadata
 - `hearth/loader.py` lands CSVs in Databricks bronze (append-only, idempotent via sha256)
-- `hearth/cli.py` commands: `validate`, `generate [--check]`, `load <id> <csv> [--dry-run]`, `check-file <id> <csv>`
-- `tests/` pytest (27 tests), including the generated-files drift check
+- `hearth/fetch.py` downloads API sources (HUD-USPS crosswalk) to git-ignored `raw_data/`
+- `hearth/cli.py` commands: `validate`, `generate [--check]`, `load <id> <csv> [--dry-run]`,
+  `check-file <id> <csv>`, `fetch-hud zip-county|zip-cbsa`
+- `tests/` pytest, including the generated-files drift check
 - `models/staging/` generated dbt files; `dbt_project.yml`, `packages.yml`, `profiles.yml`
 - `README.md` overview plus the dbt best-practice list (5 tips from the video) to follow
 
@@ -53,6 +54,7 @@ uv run ruff check .
 uv run ruff format .
 uv run --env-file .env dbt build --profiles-dir .
 uv run --env-file .env python -m hearth load zillow_zhvi_zip <csv>
+uv run --env-file .env python -m hearth fetch-hud zip-county
 ```
 
 ## Platform
@@ -60,7 +62,7 @@ uv run --env-file .env python -m hearth load zillow_zhvi_zip <csv>
 - Databricks Free Edition. Catalog `workspace`; bronze schema `bronze`; dbt dev schema
   `hearth_index_dev`; serverless 2X-Small SQL warehouse. It stops itself when idle.
 - `.env` holds `DATABRICKS_HOST`, `DATABRICKS_HTTP_PATH`, `DATABRICKS_TOKEN`
-  (and `HUD_TOKEN` once it works). Never read it aloud.
+  and `HUD_TOKEN` (a ~390-char JWT from huduser.gov/hudapi). Never read it aloud.
 - dbt core 1.11, dbt-databricks 1.13, dbt_utils 1.4.1. Python 3.12 (3.14 breaks dbt).
 - Bronze is all text, append-only (`_file_sha256`, `_loaded_at`, `_source_file`), with
   `bronze._load_log` for idempotency. Staging reads the latest load only.
@@ -77,31 +79,11 @@ uv run --env-file .env python -m hearth load zillow_zhvi_zip <csv>
 - Files must be written to the repo by me/the owner; always re-run `generate --check`
   after copying generator changes so a stale local copy is caught.
 
-## Status
-
-Done (pushed to https://github.com/mtypeworkroom/hearth-index):
-- Slice 1: Zillow ZHVI by ZIP. Metadata -> generated sources/staging/tests -> loaded
-  26,265 rows to `workspace.bronze.zillow_zhvi_zip`. `dbt build`: PASS=7, ERROR=0.
-
-In progress: Slice 2, HUD-USPS ZIP crosswalk via API (ZIP -> county, ZIP -> CBSA).
-- Blocked on the API test call returning `{"error":"Unauthenticated"}` with the token
-  saved as `HUD_TOKEN` in `.env`. Check token shape (length, quotes, stray text) and that
-  it is active on huduser.gov; a fresh token may be needed. Do not print the token.
-- Two third-party docs disagree on the `type` codes (one says 1=ZIP-county, the other
-  says 2=ZIP-county). Confirm with a real response for ZIP 78701 before writing metadata.
-  Endpoint: `https://www.huduser.gov/hudapi/public/usps?type=<n>&query=<zip>`,
-  header `Authorization: Bearer <token>`. Response: `data.results[]` with ratios
-  (`res_ratio`, `bus_ratio`, `oth_ratio`, `tot_ratio`) and the geoid fields.
-- Planned tests: each ZIP's allocation ratios sum to 1 (within tolerance).
-
-Next after the crosswalk:
-- GitHub Actions: `generate --check`, `pytest`, `ruff` on every push.
-- Geography hierarchy dimension; Zillow ZORI rents; Census ACS income; FHFA; permits.
-- Marts: affordability index, YoY and momentum trend measures.
-- Data contracts/versions; published manifest (Frictionless/DCAT/ODCS); source freshness.
-
 ## Rules
 
+- This file holds general instructions only. Feature specs, status and roadmap live in
+  GitHub issues on https://github.com/mtypeworkroom/hearth-index, created with `/to-spec`
+  (label `ready-for-agent`). Read the relevant issue before starting a feature.
 - Redistribution terms for Zillow/HUD/FHFA are unverified. Do not commit data files.
 - Small commits with clear messages. Tests alongside code. No floats for money (decimal).
 - Verify claims about external APIs against a real response before encoding them.
