@@ -7,6 +7,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from hearth.fetch import CROSSWALKS, fetch_crosswalk, hud_token
 from hearth.generate import expected_files, stale_files, write_files
 from hearth.loader import Settings, load_file
 from hearth.metadata import check_header, load_all, read_header
@@ -27,7 +28,19 @@ def main(argv: list[str] | None = None) -> int:
     check = sub.add_parser("check-file", help="compare a downloaded CSV's header with its metadata")
     check.add_argument("source_id")
     check.add_argument("csv_path", type=Path)
+    fetch = sub.add_parser("fetch-hud", help="download a HUD-USPS ZIP crosswalk to raw_data/")
+    fetch.add_argument("crosswalk", choices=sorted(CROSSWALKS))
+    fetch.add_argument("--out-dir", type=Path, default=Path("raw_data"))
     args = parser.parse_args(argv)
+
+    if args.command == "fetch-hud":
+        try:
+            path, rows = fetch_crosswalk(args.crosswalk, args.out_dir, token=hud_token())
+        except (ValueError, RuntimeError, OSError) as exc:
+            print(f"error: {exc}")
+            return 1
+        print(f"wrote {rows} rows to {path}")
+        return 0
 
     try:
         sources = load_all()
