@@ -103,3 +103,24 @@ def test_cli_validate_and_check_file(capsys):
     assert main(["check-file", "zillow_zhvi_zip", str(FIXTURE)]) == 0
     assert "header ok" in capsys.readouterr().out
     assert main(["check-file", "nope", str(FIXTURE)]) == 1
+
+
+def test_layout_must_be_a_known_choice():
+    raw = _raw()
+    raw["source"]["shape"]["layout"] = "tall"
+    with pytest.raises(ValidationError, match="layout"):
+        SourceFile.model_validate(raw)
+
+
+def test_layout_is_required():
+    raw = _raw()
+    del raw["source"]["shape"]["layout"]
+    with pytest.raises(ValidationError, match="layout"):
+        SourceFile.model_validate(raw)
+
+
+def test_wide_shape_declares_its_file_and_derived_columns():
+    shape = load_source(ZILLOW).shape
+    assert shape.layout == "wide"
+    assert shape.file_columns[0] == "RegionID"
+    assert shape.derived_columns == {"month_end", "zhvi"}

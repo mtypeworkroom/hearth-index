@@ -2,7 +2,7 @@
 
 Steps: check the header against the metadata, skip if this exact file was loaded before,
 upload the file to a Unity Catalog volume, then insert it into an append-only bronze table.
-The file's ID columns land as strings; every other column (one per month for wide files) is
+The declared file columns land as strings; every other column (one per month for wide files) is
 captured in `_rescued_data` as JSON, so new periods never change the table.
 Nothing here deletes or overwrites data.
 """
@@ -51,12 +51,12 @@ def volume_path(catalog: str, source_id: str, sha: str) -> str:
 
 def setup_statements(source: Source, catalog: str) -> list[str]:
     """Create-only statements: schema, volume, bronze table and load log."""
-    id_cols = ",\n    ".join(f"{_q(c)} STRING" for c in source.shape.id_columns)
+    file_cols = ",\n    ".join(f"{_q(c)} STRING" for c in source.shape.file_columns)
     return [
         f"CREATE SCHEMA IF NOT EXISTS {_q(catalog)}.{_q(BRONZE_SCHEMA)}",
         f"CREATE VOLUME IF NOT EXISTS {_q(catalog)}.{_q(BRONZE_SCHEMA)}.{_q(VOLUME)}",
         f"""CREATE TABLE IF NOT EXISTS {_fq(catalog, source.id)} (
-    {id_cols},
+    {file_cols},
     `_rescued_data` STRING,
     `_source_file` STRING,
     `_file_sha256` STRING,
@@ -83,10 +83,10 @@ def already_loaded_sql(source: Source, catalog: str, sha: str) -> str:
 
 def insert_sql(source: Source, catalog: str, sha: str) -> str:
     path = volume_path(catalog, source.id, sha)
-    schema_ddl = ", ".join(f"{_q(c)} STRING" for c in source.shape.id_columns)
-    id_cols = ", ".join(_q(c) for c in source.shape.id_columns)
+    schema_ddl = ", ".join(f"{_q(c)} STRING" for c in source.shape.file_columns)
+    file_cols = ", ".join(_q(c) for c in source.shape.file_columns)
     return f"""INSERT INTO {_fq(catalog, source.id)}
-SELECT {id_cols}, `_rescued_data`, _metadata.file_path, '{sha}', current_timestamp()
+SELECT {file_cols}, `_rescued_data`, _metadata.file_path, '{sha}', current_timestamp()
 FROM read_files(
     '{path}',
     format => 'csv',

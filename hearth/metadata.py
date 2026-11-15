@@ -1,7 +1,7 @@
 """Source metadata: the single source of truth that dbt files are generated from.
 
 Every field is validated (extra keys are rejected) so typos fail early, and the file is
-cross-checked: columns must come from declared ID columns, rules must name real columns.
+cross-checked: columns must come from declared file columns, rules must name real columns.
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 import csv
 import re
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, ClassVar, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -75,17 +75,60 @@ class ValueColumns(_Strict):
         return self
 
 
-class Shape(_Strict):
+class WideShape(_Strict):
+    """Wide files: ID columns, then one column per period (e.g. Zillow ZHVI).
+
+    The ID columns land in bronze as strings; the period columns are captured as JSON in
+    `_rescued_data` and unpivoted in staging into `month_column` and `value_column`.
+    """
+
     layout: Literal["wide"]
     id_columns: list[str] = Field(min_length=1)
     value_columns: ValueColumns
 
+    # Which metadata key lists the file columns (used in validation messages).
+    FILE_COLUMNS_KEY: ClassVar[str] = "id_columns"
+
     @model_validator(mode="after")
-    def _safe_header_names(self) -> Shape:
+    def _safe_header_names(self) -> WideShape:
         bad = [c for c in self.id_columns if "`" in c or "'" in c or not c.strip()]
         if bad:
             raise ValueError(f"id_columns contain unsafe or blank names: {bad}")
         return self
+
+    @property
+    def file_columns(self) -> list[str]:
+        """Declared file headers. They land in bronze as STRING columns, in this order."""
+        return self.id_columns
+
+    @property
+    def derived_columns(self) -> set[str]:
+        """Columns created in staging (by unpivoting), so they have no 'from'."""
+        return {self.value_columns.month_column, self.value_columns.value_column}
+
+    def check_header(self, header: list[str]) -> tuple[list[str], list[str]]:
+        """Layout-specific header check. Returns (errors, warnings)."""
+        errors: list[str] = []
+        warnings: list[str] = []
+        pattern = re.compile(self.value_columns.pattern)
+        value_cols = [h for h in header if pattern.fullmatch(h)]
+        id_cols = [h for h in header if not pattern.fullmatch(h)]
+        missing = [c for c in self.id_columns if c not in header]
+        if missing:
+            errors.append(f"missing expected columns: {missing}")
+        extra = [c for c in id_cols if c not in self.id_columns]
+        if extra:
+            warnings.append(f"new columns not in metadata (ignored until added): {extra}")
+        if not value_cols:
+            errors.append("no columns match the period pattern")
+        elif header[len(id_cols) :] != value_cols:
+            errors.append("period columns are not all at the end of the header")
+        return errors, warnings
+
+
+# The layout is an explicit choice: pydantic picks the shape class from `layout`.
+# Only `wide` exists today; new layouts join this union.
+Shape = Annotated[WideShape, Field(discriminator="layout")]
 
 
 class Column(_Strict):
@@ -142,18 +185,22 @@ class Source(_Strict):
         names = [c.name for c in self.columns]
         if len(set(names)) != len(names):
             raise ValueError("duplicate column names")
-        made = {self.shape.value_columns.month_column, self.shape.value_columns.value_column}
+        shape = self.shape
+        made = shape.derived_columns
         for col in self.columns:
             if col.from_ is None:
                 if col.name not in made:
                     raise ValueError(
-                        f"column {col.name} has no 'from' and is not an unpivot column"
+                        f"column {col.name} has no 'from' and is not a derived "
+                        f"({shape.layout} layout) column"
                     )
-            elif col.from_ not in self.shape.id_columns:
-                raise ValueError(f"column {col.name}: 'from' {col.from_} is not in id_columns")
+            elif col.from_ not in shape.file_columns:
+                raise ValueError(
+                    f"column {col.name}: 'from' {col.from_} is not in {shape.FILE_COLUMNS_KEY}"
+                )
         missing = made - set(names)
         if missing:
-            raise ValueError(f"unpivot columns must be declared in columns: {sorted(missing)}")
+            raise ValueError(f"derived columns must be declared in columns: {sorted(missing)}")
         for rule in self.rules:
             used = rule.columns if isinstance(rule, UniqueRule) else [rule.column]
             unknown = [c for c in used if c not in names]
@@ -188,23 +235,11 @@ def load_all(directory: Path = METADATA_DIR) -> dict[str, Source]:
 
 
 def check_header(source: Source, header: list[str]) -> tuple[list[str], list[str]]:
-    """Compare a real file's header with the metadata. Returns (errors, warnings)."""
-    errors: list[str] = []
-    warnings: list[str] = []
-    shape = source.shape
-    pattern = re.compile(shape.value_columns.pattern)
-    value_cols = [h for h in header if pattern.fullmatch(h)]
-    id_cols = [h for h in header if not pattern.fullmatch(h)]
-    missing = [c for c in shape.id_columns if c not in header]
-    if missing:
-        errors.append(f"missing expected columns: {missing}")
-    extra = [c for c in id_cols if c not in shape.id_columns]
-    if extra:
-        warnings.append(f"new columns not in metadata (ignored until added): {extra}")
-    if not value_cols:
-        errors.append("no columns match the period pattern")
-    elif header[len(id_cols) :] != value_cols:
-        errors.append("period columns are not all at the end of the header")
+    """Compare a real file's header with the metadata. Returns (errors, warnings).
+
+    The layout decides what a valid header looks like; duplicates are always an error.
+    """
+    errors, warnings = source.shape.check_header(header)
     if len(set(header)) != len(header):
         errors.append("duplicate column names in header")
     return errors, warnings

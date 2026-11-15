@@ -3,7 +3,7 @@
 Everything written here is derived from metadata/sources/*.yml. Edit the metadata, never the
 generated files; `python -m hearth generate --check` fails if they are out of date.
 
-The bronze table (written by the loader) has the file's ID columns as strings, a
+The bronze table (written by the loader) has the declared file columns as strings, a
 `_rescued_data` JSON string holding every period column, plus `_source_file` and `_loaded_at`.
 Staging explodes that JSON, so new periods in later files need no code or metadata change.
 """
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import yaml
 
-from hearth.metadata import METADATA_DIR, Source, UniqueRule, load_all
+from hearth.metadata import METADATA_DIR, Column, Source, UniqueRule, load_all
 
 ROOT = Path(__file__).resolve().parent.parent
 STAGING_DIR = ROOT / "models" / "staging"
@@ -32,20 +32,21 @@ def _dump(data: dict, header: str) -> str:
     return f"# {header}\n{body}"
 
 
-def _expr(source: Source, column) -> str:
-    if column.from_ is None:
-        raw = "_period" if column.name == source.shape.value_columns.month_column else "_value"
-    else:
-        raw = column.from_
+def _cast(raw: str, column: Column) -> str:
+    """Trim, turn empty strings into null, and cast to the declared type."""
     return f"cast(nullif(trim({raw}), '') as {column.type}) as {column.name}"
 
 
-def render_staging_sql(source: Source) -> str:
-    vc = source.shape.value_columns
-    select = ",\n        ".join(_expr(source, c) for c in source.columns)
+def _staging_sql(source: Source, note: str, middle: str, select_from: str, raw_of) -> str:
+    """Staging SQL shared by every layout: src -> latest_load -> [layout CTEs] -> renamed.
+
+    `middle` holds any layout-specific CTEs, `select_from` is the CTE that `renamed` reads,
+    and `raw_of(column)` names the text column each output column is cast from.
+    """
+    select = ",\n        ".join(_cast(raw_of(c), c) for c in source.columns)
     return f"""-- {HEADER.format(sid=source.id)}
 -- {source.title}: one row per {source.grain.geography} and {source.grain.time}.
--- Uses the most recent load only; the wide file is unpivoted from its rescued-data JSON.
+-- {note}
 with src as (
     select * from {{{{ source('{BRONZE_SCHEMA}', '{source.id}') }}}}
 ),
@@ -54,7 +55,28 @@ latest_load as (
     select * from src
     where _loaded_at = (select max(_loaded_at) from src)
 ),
+{middle}
+renamed as (
+    select
+        {select},
+        _source_file,
+        _loaded_at
+    from {select_from}
+)
 
+select * from renamed
+"""
+
+
+def _render_wide_sql(source: Source) -> str:
+    """Wide layout: unpivot the period columns from the rescued-data JSON."""
+    vc = source.shape.value_columns
+    derived = {vc.month_column: "_period", vc.value_column: "_value"}
+
+    def raw_of(column: Column) -> str:
+        return derived[column.name] if column.from_ is None else column.from_
+
+    middle = f"""
 unpivoted as (
     select
         l.*,
@@ -64,17 +86,17 @@ unpivoted as (
     lateral view explode(from_json(l._rescued_data, 'map<string,string>')) p as key, value
     where p.key rlike '{spark_regex(vc.pattern)}'
 ),
-
-renamed as (
-    select
-        {select},
-        _source_file,
-        _loaded_at
-    from unpivoted
-)
-
-select * from renamed
 """
+    note = "Uses the most recent load only; the wide file is unpivoted from its rescued-data JSON."
+    return _staging_sql(source, note, middle, "unpivoted", raw_of)
+
+
+# One staging renderer per layout declared in the metadata.
+_STAGING_RENDERERS = {"wide": _render_wide_sql}
+
+
+def render_staging_sql(source: Source) -> str:
+    return _STAGING_RENDERERS[source.shape.layout](source)
 
 
 def _column_tests(source: Source, column) -> list:
