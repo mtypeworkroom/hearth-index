@@ -1,0 +1,54 @@
+# Source metadata: the single source of truth. dbt files are generated from this.
+# Anything marked "unverified" has not been checked against the real file or terms yet.
+schema_version: 1
+source:
+  id: hud_usps_zip_county
+  title: HUD-USPS ZIP code to county crosswalk
+  owner: {name: Stefanie, contact: mtypeworkroom on GitHub}
+  access:
+    kind: api
+    url: https://www.huduser.gov/hudapi/public/usps?type=2&query=All
+    url_status: "type 2 = zip-county confirmed against real responses (2026-11-14); fetched with `hearth fetch-hud zip-county`"
+    format: json
+  license:
+    terms_url: https://www.huduser.gov/portal/datasets/usps_crosswalk.html
+    attribution: "U.S. Department of Housing and Urban Development (HUD) and U.S. Postal Service (USPS), HUD-USPS ZIP Code Crosswalk"
+    redistribution: unverified
+  refresh: {cadence: quarterly}
+  freshness: {warn_after_days: 120, error_after_days: 200}
+  # One row per ZIP and county for a quarter; a ZIP that spans counties has several rows.
+  grain: {geography: zip, time: quarter}
+
+  # The file is long: one row per record, every column declared. No unpivot.
+  # fetch-hud writes these columns in this order (2026 Q2: 54,570 rows over 39,484 ZIPs).
+  shape:
+    layout: long
+    file_columns: [zip, geoid, city, state, res_ratio, bus_ratio, oth_ratio, tot_ratio, year, quarter]
+
+  # Ratios: HUD sends JSON doubles (up to 21 decimal places, some in scientific notation).
+  # decimal(38,30) keeps every digit HUD sends without using floats.
+  columns:
+    - {name: zip, from: zip, type: string, nullable: false, pattern: '^\d{5}$', description: "5-digit ZIP code"}
+    - name: county_fips
+      from: geoid
+      type: string
+      nullable: false
+      pattern: '^\d{5}$'
+      # 2026 Q2 has 9 rows with a 2-digit state code instead (ZIP 77352 and Pacific territories).
+      pattern_severity: warn
+      description: "5-digit county FIPS code (2-digit state FIPS + 3-digit county)"
+    - {name: city, from: city, type: string, nullable: true, description: "USPS preferred city name"}
+    - {name: state, from: state, type: string, nullable: true, description: "Two-letter USPS state code"}
+    - {name: res_ratio, from: res_ratio, type: "decimal(38,30)", nullable: true, units: ratio, description: "Share of the ZIP's residential addresses in this county"}
+    - {name: bus_ratio, from: bus_ratio, type: "decimal(38,30)", nullable: true, units: ratio, description: "Share of the ZIP's business addresses in this county"}
+    - {name: oth_ratio, from: oth_ratio, type: "decimal(38,30)", nullable: true, units: ratio, description: "Share of the ZIP's other addresses in this county"}
+    - {name: tot_ratio, from: tot_ratio, type: "decimal(38,30)", nullable: true, units: ratio, description: "Share of all the ZIP's addresses in this county"}
+    - {name: year, from: year, type: int, nullable: false, description: "Crosswalk year"}
+    - {name: quarter, from: quarter, type: int, nullable: false, description: "Crosswalk quarter (1-4)"}
+
+  rules:
+    - {kind: unique, columns: [zip, county_fips]}
+    - {kind: range, column: res_ratio, min: 0, max: 1}
+    - {kind: range, column: bus_ratio, min: 0, max: 1}
+    - {kind: range, column: oth_ratio, min: 0, max: 1}
+    - {kind: range, column: tot_ratio, min: 0, max: 1}

@@ -4,8 +4,9 @@ Everything written here is derived from metadata/sources/*.yml. Edit the metadat
 generated files; `python -m hearth generate --check` fails if they are out of date.
 
 The bronze table (written by the loader) has the declared file columns as strings, a
-`_rescued_data` JSON string holding every period column, plus `_source_file` and `_loaded_at`.
-Staging explodes that JSON, so new periods in later files need no code or metadata change.
+`_rescued_data` JSON string holding any undeclared column, plus `_source_file` and `_loaded_at`.
+Wide sources: staging explodes that JSON (one column per period), so new periods in later
+files need no code or metadata change. Long sources: staging casts the columns directly.
 """
 
 from __future__ import annotations
@@ -91,8 +92,18 @@ unpivoted as (
     return _staging_sql(source, note, middle, "unpivoted", raw_of)
 
 
+def _render_long_sql(source: Source) -> str:
+    """Long layout: one row per record, so cast each declared file column directly."""
+
+    def raw_of(column: Column) -> str:
+        return column.from_
+
+    note = "Uses the most recent load only; each file column is cast directly (no unpivot)."
+    return _staging_sql(source, note, "", "latest_load", raw_of)
+
+
 # One staging renderer per layout declared in the metadata.
-_STAGING_RENDERERS = {"wide": _render_wide_sql}
+_STAGING_RENDERERS = {"wide": _render_wide_sql, "long": _render_long_sql}
 
 
 def render_staging_sql(source: Source) -> str:
@@ -105,7 +116,10 @@ def _column_tests(source: Source, column) -> list:
         tests.append("not_null")
     if column.pattern:
         expr = f"rlike '{spark_regex(column.pattern)}'"
-        tests.append({"dbt_utils.expression_is_true": {"arguments": {"expression": expr}}})
+        test: dict = {"arguments": {"expression": expr}}
+        if column.pattern_severity != "error":
+            test["config"] = {"severity": column.pattern_severity}
+        tests.append({"dbt_utils.expression_is_true": test})
     for rule in source.rules:
         if rule.kind == "range" and rule.column == column.name:
             args = {

@@ -13,7 +13,7 @@ from hearth.loader import (
     volume_path,
 )
 from hearth.metadata import load_all
-from tests.test_metadata import FIXTURE
+from tests.test_metadata import FIXTURE, HUD_FIXTURE
 
 SHA = "a" * 64
 
@@ -74,3 +74,40 @@ def test_bad_header_stops_the_load(tmp_path):
     settings = Settings(host="h", http_path="p", token="t", catalog="workspace")
     with pytest.raises(ValueError, match="header check failed"):
         load_file(_source(), bad, settings, dry_run=True)
+
+
+# --- long layout ---------------------------------------------------------------------------
+
+
+def _hud():
+    return load_all()["hud_usps_zip_county"]
+
+
+def test_long_bronze_table_has_every_file_column_as_text():
+    statements = setup_statements(_hud(), "workspace")
+    assert all(s.startswith("CREATE ") and "IF NOT EXISTS" in s for s in statements)
+    table_sql = statements[2]
+    assert "`workspace`.`bronze`.`hud_usps_zip_county`" in table_sql
+    for col in _hud().shape.file_columns:
+        assert f"`{col}` STRING" in table_sql
+    for col in ("_rescued_data", "_source_file", "_file_sha256", "_loaded_at"):
+        assert col in table_sql
+
+
+def test_long_insert_declares_every_file_column():
+    sql = insert_sql(_hud(), "workspace", SHA)
+    assert sql.startswith("INSERT INTO `workspace`.`bronze`.`hud_usps_zip_county`")
+    assert f"/Volumes/workspace/bronze/landing/hud_usps_zip_county/{SHA}.csv" in sql
+    assert "schema => '`zip` STRING, `geoid` STRING" in sql
+    assert "`quarter` STRING'" in sql
+
+
+def test_long_reload_is_checked_by_sha():
+    sql = already_loaded_sql(_hud(), "workspace", SHA)
+    assert "source_id = 'hud_usps_zip_county'" in sql
+    assert f"file_sha256 = '{SHA}'" in sql
+
+
+def test_long_dry_run():
+    settings = Settings(host="h", http_path="p", token="t", catalog="workspace")
+    assert load_file(_hud(), HUD_FIXTURE, settings, dry_run=True).startswith("dry run ok")

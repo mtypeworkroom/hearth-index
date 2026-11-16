@@ -124,3 +124,123 @@ def test_wide_shape_declares_its_file_and_derived_columns():
     assert shape.layout == "wide"
     assert shape.file_columns[0] == "RegionID"
     assert shape.derived_columns == {"month_end", "zhvi"}
+
+
+# --- long layout (one row per record, no unpivot) ---------------------------------------
+
+HUD = METADATA_DIR / "hud_usps_zip_county.yml"
+HUD_FIXTURE = Path(__file__).parent / "fixtures" / "hud_zip_county_header_sample.csv"
+
+
+def _hud_raw():
+    return yaml.safe_load(HUD.read_text(encoding="utf-8"))
+
+
+def test_hud_metadata_loads_as_long_layout():
+    source = load_all()["hud_usps_zip_county"]
+    assert source.shape.layout == "long"
+    assert source.shape.file_columns[:2] == ["zip", "geoid"]
+    assert source.shape.derived_columns == set()
+    assert source.access.kind == "api"
+    assert source.refresh.cadence == "quarterly"
+    assert source.license.redistribution == "unverified"
+    assert (source.grain.geography, source.grain.time) == ("zip", "quarter")
+
+
+def test_hud_columns_are_typed_without_floats():
+    cols = {c.name: c for c in load_source(HUD).columns}
+    assert cols["county_fips"].from_ == "geoid"
+    for name in ("res_ratio", "bus_ratio", "oth_ratio", "tot_ratio"):
+        assert cols[name].type.startswith("decimal(")
+    assert cols["year"].type == "int"
+    assert cols["quarter"].type == "int"
+    assert all(c.type not in ("double", "float") for c in cols.values())
+
+
+def test_long_layout_rejects_wide_settings():
+    raw = _hud_raw()
+    raw["source"]["shape"]["value_columns"] = {
+        "pattern": "x",
+        "month_column": "m",
+        "value_column": "v",
+    }
+    with pytest.raises(ValidationError, match="value_columns"):
+        SourceFile.model_validate(raw)
+
+
+def test_wide_layout_needs_its_settings():
+    raw = _raw()
+    del raw["source"]["shape"]["value_columns"]
+    with pytest.raises(ValidationError, match="value_columns"):
+        SourceFile.model_validate(raw)
+
+
+def test_duplicate_file_columns_are_rejected():
+    raw = _raw()
+    raw["source"]["shape"]["id_columns"].append("RegionID")
+    with pytest.raises(ValidationError, match="duplicates"):
+        SourceFile.model_validate(raw)
+
+
+def test_pattern_severity_needs_a_pattern():
+    raw = _hud_raw()
+    raw["source"]["columns"][2]["pattern_severity"] = "warn"  # city has no pattern
+    with pytest.raises(ValidationError, match="pattern_severity"):
+        SourceFile.model_validate(raw)
+
+
+def test_long_from_must_be_a_declared_file_column():
+    raw = _hud_raw()
+    raw["source"]["columns"][0]["from"] = "Nope"
+    with pytest.raises(ValidationError, match="not in file_columns"):
+        SourceFile.model_validate(raw)
+
+
+def test_long_column_without_from_is_rejected():
+    raw = _hud_raw()
+    del raw["source"]["columns"][0]["from"]
+    with pytest.raises(ValidationError, match="no 'from'"):
+        SourceFile.model_validate(raw)
+
+
+def test_long_header_matches_sample():
+    errors, warnings = check_header(load_source(HUD), read_header(HUD_FIXTURE))
+    assert (errors, warnings) == ([], [])
+
+
+def test_long_missing_column_is_an_error():
+    header = [h for h in read_header(HUD_FIXTURE) if h != "geoid"]
+    errors, _ = check_header(load_source(HUD), header)
+    assert any("geoid" in e for e in errors)
+
+
+def test_long_duplicate_column_is_an_error():
+    header = read_header(HUD_FIXTURE) + ["zip"]
+    errors, _ = check_header(load_source(HUD), header)
+    assert any("duplicate" in e for e in errors)
+
+
+def test_long_reordered_columns_are_an_error():
+    header = read_header(HUD_FIXTURE)
+    header[0], header[1] = header[1], header[0]
+    errors, _ = check_header(load_source(HUD), header)
+    assert any("declared order" in e for e in errors)
+
+
+def test_long_extra_column_in_the_middle_is_an_error():
+    header = read_header(HUD_FIXTURE)
+    header.insert(2, "newcol")
+    errors, _ = check_header(load_source(HUD), header)
+    assert any("declared order" in e for e in errors)
+
+
+def test_long_extra_column_is_a_warning():
+    header = read_header(HUD_FIXTURE) + ["newcol"]
+    errors, warnings = check_header(load_source(HUD), header)
+    assert errors == []
+    assert any("newcol" in w for w in warnings)
+
+
+def test_cli_check_file_long(capsys):
+    assert main(["check-file", "hud_usps_zip_county", str(HUD_FIXTURE)]) == 0
+    assert "header ok" in capsys.readouterr().out

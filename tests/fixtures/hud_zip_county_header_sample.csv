@@ -1,0 +1,3 @@
+zip,geoid,city,state,res_ratio,bus_ratio,oth_ratio,tot_ratio,year,quarter
+00001,00001,SAMPLETOWN,ZZ,1,0.5,5.0e-5,0.99995,2026,2
+00002,00002,OTHERTOWN,ZZ,0,1,0,1,2026,2

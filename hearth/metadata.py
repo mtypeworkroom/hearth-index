@@ -75,6 +75,15 @@ class ValueColumns(_Strict):
         return self
 
 
+def _check_file_column_names(columns: list[str], key: str) -> None:
+    """File headers become quoted SQL identifiers: no quotes, blanks or duplicates."""
+    bad = [c for c in columns if "`" in c or "'" in c or not c.strip()]
+    if bad:
+        raise ValueError(f"{key} contain unsafe or blank names: {bad}")
+    if len(set(columns)) != len(columns):
+        raise ValueError(f"{key} contain duplicates")
+
+
 class WideShape(_Strict):
     """Wide files: ID columns, then one column per period (e.g. Zillow ZHVI).
 
@@ -91,9 +100,7 @@ class WideShape(_Strict):
 
     @model_validator(mode="after")
     def _safe_header_names(self) -> WideShape:
-        bad = [c for c in self.id_columns if "`" in c or "'" in c or not c.strip()]
-        if bad:
-            raise ValueError(f"id_columns contain unsafe or blank names: {bad}")
+        _check_file_column_names(self.id_columns, self.FILE_COLUMNS_KEY)
         return self
 
     @property
@@ -126,9 +133,49 @@ class WideShape(_Strict):
         return errors, warnings
 
 
+class LongShape(_Strict):
+    """Long files: one row per record, every column declared (e.g. HUD-USPS crosswalks).
+
+    All declared columns land in bronze as strings; staging casts them directly, no unpivot.
+    """
+
+    layout: Literal["long"]
+    file_columns: list[str] = Field(min_length=1)
+
+    FILE_COLUMNS_KEY: ClassVar[str] = "file_columns"
+
+    @model_validator(mode="after")
+    def _safe_header_names(self) -> LongShape:
+        _check_file_column_names(self.file_columns, self.FILE_COLUMNS_KEY)
+        return self
+
+    @property
+    def derived_columns(self) -> set[str]:
+        """Long files create no columns in staging; every column has a 'from'."""
+        return set()
+
+    def check_header(self, header: list[str]) -> tuple[list[str], list[str]]:
+        """Declared columns must come first, in order; extra columns at the end only warn.
+
+        Order matters because the loader passes an explicit schema to read_files, which may
+        map CSV columns by position; a moved column would silently land under the wrong name.
+        """
+        errors: list[str] = []
+        warnings: list[str] = []
+        missing = [c for c in self.file_columns if c not in header]
+        if missing:
+            errors.append(f"missing expected columns: {missing}")
+        elif header[: len(self.file_columns)] != self.file_columns:
+            errors.append(f"columns are not in the declared order: {self.file_columns}")
+        extra = [c for c in header if c not in self.file_columns]
+        if extra:
+            warnings.append(f"new columns not in metadata (ignored until added): {extra}")
+        return errors, warnings
+
+
 # The layout is an explicit choice: pydantic picks the shape class from `layout`.
-# Only `wide` exists today; new layouts join this union.
-Shape = Annotated[WideShape, Field(discriminator="layout")]
+# New layouts join this union.
+Shape = Annotated[WideShape | LongShape, Field(discriminator="layout")]
 
 
 class Column(_Strict):
@@ -138,10 +185,18 @@ class Column(_Strict):
     type: str = Field(pattern=_TYPE)
     nullable: bool = True
     pattern: str | None = None
+    # Severity of the generated pattern test. `warn` for known, documented exceptions.
+    pattern_severity: Literal["warn", "error"] = "error"
     units: str | None = None
     description: str | None = None
 
     model_config = ConfigDict(extra="forbid", frozen=True, populate_by_name=True)
+
+    @model_validator(mode="after")
+    def _severity_needs_pattern(self) -> Column:
+        if "pattern_severity" in self.model_fields_set and self.pattern is None:
+            raise ValueError(f"column {self.name}: pattern_severity is set but pattern is not")
+        return self
 
 
 class UniqueRule(_Strict):

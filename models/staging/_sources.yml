@@ -5,6 +5,24 @@ sources:
   database: '{{ env_var(''DATABRICKS_CATALOG'', ''workspace'') }}'
   schema: bronze
   tables:
+  - name: hud_usps_zip_county
+    description: HUD-USPS ZIP code to county crosswalk. Landed as-is by the loader (all text).
+    config:
+      loaded_at_field: _loaded_at
+      freshness:
+        warn_after:
+          count: 120
+          period: day
+        error_after:
+          count: 200
+          period: day
+      meta:
+        owner: Stefanie
+        refresh_cadence: quarterly
+        attribution: U.S. Department of Housing and Urban Development (HUD) and U.S. Postal Service (USPS),
+          HUD-USPS ZIP Code Crosswalk
+        terms_url: https://www.huduser.gov/portal/datasets/usps_crosswalk.html
+        redistribution: unverified
   - name: zillow_zhvi_zip
     description: Zillow Home Value Index (ZHVI) by ZIP code. Landed as-is by the loader (all text).
     config:
