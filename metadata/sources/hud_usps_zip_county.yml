@@ -16,8 +16,11 @@ source:
     redistribution: unverified
   refresh: {cadence: quarterly}
   freshness: {warn_after_days: 120, error_after_days: 200}
-  # One row per ZIP and county for a quarter; a ZIP that spans counties has several rows.
-  grain: {geography: zip, time: quarter}
+  # One row per ZIP and county for a quarter. ZIPs are USPS delivery routes, not areas, so
+  # they cross county lines: in 2026 Q2, 11,379 of 39,484 ZIPs span 2-7 counties (4 cross a
+  # state line). Rolling ZIP values up to county must weight by a ratio (or pick the largest
+  # share); a plain join counts a multi-county ZIP in full in every county.
+  grain: {geography: [zip, county], time: quarter}
 
   # The file is long: one row per record, every column declared. No unpivot.
   # fetch-hud writes these columns in this order (2026 Q2: 54,570 rows over 39,484 ZIPs).
@@ -39,7 +42,7 @@ source:
       description: "5-digit county FIPS code (2-digit state FIPS + 3-digit county)"
     - {name: city, from: city, type: string, nullable: true, description: "USPS preferred city name"}
     - {name: state, from: state, type: string, nullable: true, description: "Two-letter USPS state code"}
-    - {name: res_ratio, from: res_ratio, type: "decimal(38,30)", nullable: true, units: ratio, description: "Share of the ZIP's residential addresses in this county"}
+    - {name: res_ratio, from: res_ratio, type: "decimal(38,30)", nullable: true, units: ratio, description: "Share of the ZIP's residential addresses in this county. Use it to weight ZIP housing values when rolling up to county; a ZIP's ratios sum to 1 across its counties"}
     - {name: bus_ratio, from: bus_ratio, type: "decimal(38,30)", nullable: true, units: ratio, description: "Share of the ZIP's business addresses in this county"}
     - {name: oth_ratio, from: oth_ratio, type: "decimal(38,30)", nullable: true, units: ratio, description: "Share of the ZIP's other addresses in this county"}
     - {name: tot_ratio, from: tot_ratio, type: "decimal(38,30)", nullable: true, units: ratio, description: "Share of all the ZIP's addresses in this county"}

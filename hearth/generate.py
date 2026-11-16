@@ -46,7 +46,7 @@ def _staging_sql(source: Source, note: str, middle: str, select_from: str, raw_o
     """
     select = ",\n        ".join(_cast(raw_of(c), c) for c in source.columns)
     return f"""-- {HEADER.format(sid=source.id)}
--- {source.title}: one row per {source.grain.geography} and {source.grain.time}.
+-- {source.title}: one row per {source.grain.describe()}.
 -- {note}
 with src as (
     select * from {{{{ source('{BRONZE_SCHEMA}', '{source.id}') }}}}
@@ -152,9 +152,7 @@ def render_staging_yml(sources: dict[str, Source]) -> str:
             columns.append(entry)
         model: dict = {
             "name": f"stg_{source.id}",
-            "description": (
-                f"{source.title}, one row per {source.grain.geography} and {source.grain.time}."
-            ),
+            "description": (f"{source.title}, one row per {source.grain.describe()}."),
             "config": {"meta": {"owner": source.owner.name, "source_id": source.id}},
             "columns": columns,
         }

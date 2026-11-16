@@ -114,3 +114,11 @@ def test_pattern_severity_is_carried_into_the_test():
     assert fips["dbt_utils.expression_is_true"]["config"] == {"severity": "warn"}
     zip_test = next(t for t in cols["zip"]["data_tests"] if isinstance(t, dict))
     assert "config" not in zip_test["dbt_utils.expression_is_true"]
+
+
+def test_descriptions_state_the_full_grain():
+    sql = render_staging_sql(_hud())
+    assert "one row per zip, county and quarter." in sql
+    data = yaml.safe_load(render_staging_yml(load_all()))
+    model = next(m for m in data["models"] if m["name"] == "stg_hud_usps_zip_county")
+    assert "one row per zip, county and quarter" in model["description"]

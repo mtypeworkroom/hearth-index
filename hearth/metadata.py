@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Annotated, ClassVar, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 METADATA_DIR = Path(__file__).resolve().parent.parent / "metadata" / "sources"
 _NAME = r"^[a-z][a-z0-9_]*$"
@@ -57,9 +57,33 @@ class Freshness(_Strict):
         return self
 
 
+Geography = Literal["zip", "county", "cbsa", "state", "tract"]
+
+
 class Grain(_Strict):
-    geography: Literal["zip", "county", "cbsa", "state", "tract"]
+    """What one row is. A crosswalk lists several geographies: one row per pair and period.
+
+    `geography: zip` is shorthand for `geography: [zip]`.
+    """
+
+    geography: list[Geography] = Field(min_length=1)
     time: Literal["month", "quarter", "year"]
+
+    @field_validator("geography", mode="before")
+    @classmethod
+    def _one_or_many(cls, value: object) -> object:
+        return [value] if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def _no_repeats(self) -> Grain:
+        if len(set(self.geography)) != len(self.geography):
+            raise ValueError("grain geography must not repeat")
+        return self
+
+    def describe(self) -> str:
+        """Plain-English row grain, e.g. 'zip, county and quarter'."""
+        parts = [*self.geography, self.time]
+        return f"{', '.join(parts[:-1])} and {parts[-1]}"
 
 
 class ValueColumns(_Strict):

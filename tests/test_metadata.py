@@ -144,7 +144,23 @@ def test_hud_metadata_loads_as_long_layout():
     assert source.access.kind == "api"
     assert source.refresh.cadence == "quarterly"
     assert source.license.redistribution == "unverified"
-    assert (source.grain.geography, source.grain.time) == ("zip", "quarter")
+    assert (source.grain.geography, source.grain.time) == (["zip", "county"], "quarter")
+
+
+def test_grain_describes_every_key():
+    assert load_source(HUD).grain.describe() == "zip, county and quarter"
+    assert load_source(ZILLOW).grain.describe() == "zip and month"
+
+
+def test_single_geography_is_a_one_item_list():
+    assert load_source(ZILLOW).grain.geography == ["zip"]
+
+
+def test_grain_geography_must_not_repeat():
+    raw = _hud_raw()
+    raw["source"]["grain"]["geography"] = ["zip", "zip"]
+    with pytest.raises(ValidationError, match="repeat"):
+        SourceFile.model_validate(raw)
 
 
 def test_hud_columns_are_typed_without_floats():

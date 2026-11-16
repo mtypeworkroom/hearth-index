@@ -2,7 +2,7 @@
 version: 2
 models:
 - name: stg_hud_usps_zip_county
-  description: HUD-USPS ZIP code to county crosswalk, one row per zip and quarter.
+  description: HUD-USPS ZIP code to county crosswalk, one row per zip, county and quarter.
   config:
     meta:
       owner: Stefanie
@@ -29,7 +29,8 @@ models:
   - name: state
     description: Two-letter USPS state code
   - name: res_ratio
-    description: Share of the ZIP's residential addresses in this county
+    description: Share of the ZIP's residential addresses in this county. Use it to weight ZIP housing
+      values when rolling up to county; a ZIP's ratios sum to 1 across its counties
     config:
       meta:
         units: ratio
